@@ -1,0 +1,6 @@
+src/cert/*
+services/*
+!services/.gitkeep
+node_modules
+logs/
+
