@@ -2,6 +2,7 @@ const express = require('express');
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
+const path = require('path');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const rateLimit = require('express-rate-limit');
 
@@ -194,10 +195,52 @@ app.use('/api/appmotorista', (req, res, next) => {
 // Certificados SSL
 let credentials;
 try {
+
+   const certDir = path.join(__dirname, 'src/cert'); // Ajuste o caminho conforme necessário
+  
+  // Verifica se a pasta existe
+  if (!fs.existsSync(certDir)) {
+    throw new Error(`Pasta de certificados não encontrada: ${certDir}`);
+  }
+  
+  // Lê todos os arquivos da pasta
+  const files = fs.readdirSync(certDir);
+  
+  // Procura por arquivos de chave (.key)
+  const keyFile = files.find(file => 
+    file.endsWith('.key') || file.match(/\.key$/i)
+  );
+  
+  // Procura por arquivos de certificado (.pem, .crt, .cer)
+  const certFile = files.find(file => 
+    file.endsWith('.pem') || 
+    file.endsWith('.crt') || 
+    file.endsWith('.cer') ||
+    file.match(/\.(pem|crt|cer)$/i)
+  );
+  
+  if (!keyFile) {
+    throw new Error(`Nenhum arquivo .key encontrado em ${certDir}`);
+  }
+  
+  if (!certFile) {
+    throw new Error(`Nenhum arquivo .pem, .crt ou .cer encontrado em ${certDir}`);
+  }
+  
+  // Carrega os arquivos
+  const keyPath = path.join(certDir, keyFile);
+  const certPath = path.join(certDir, certFile);
+  
   credentials = {
-    key: fs.readFileSync('src/cert/privado.key'),
-    cert: fs.readFileSync('src/cert/certificado.pem')
+    key: fs.readFileSync(keyPath),
+    cert: fs.readFileSync(certPath)
   };
+
+  console.log(`✅ Certificados SSL carregados com sucesso:`);
+  console.log(`   📁 Pasta: ${certDir}`);
+  console.log(`   🔑 Chave: ${keyFile}`);
+  console.log(`   📜 Certificado: ${certFile}`);
+
 } catch (error) {
   console.error('Erro ao carregar certificados SSL:', error);
   process.exit(1);
