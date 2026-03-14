@@ -1,89 +1,97 @@
-// Atualizar data e hora
+// --- 1. Atualizar Data e Hora ---
 function updateDateTime() {
-  const now = new Date();
-  
-  const optionsDate = { 
-      weekday: 'long', 
-      year: 'numeric', 
-      month: 'long', 
-      day: 'numeric' 
-  };
-  
-  document.getElementById('current-date').textContent = 
-      now.toLocaleDateString('pt-BR', optionsDate);
-  
-  document.getElementById('current-time').textContent = 
-      now.toLocaleTimeString('pt-BR');
-  
-  document.getElementById('year').textContent = now.getFullYear();
+    const now = new Date();
+    
+    const timeEl = document.getElementById('current-time');
+    if (timeEl) timeEl.textContent = now.toLocaleTimeString('pt-BR');
+    
+    const yearEl = document.getElementById('year');
+    if (yearEl) yearEl.textContent = now.getFullYear();
 }
 
+// --- 2. Verificar Status e Métricas (Latência Real) ---
+async function checkServices() {
+    const startTime = Date.now(); // Marca o início para cálculo de latência
+    
+    try {
+        const response = await fetch('/health');
+        const data = await response.json();
+        const endTime = Date.now();
+
+        // Cálculo de Latência: prioriza dado do servidor ou calcula localmente
+        const latency = data.metrics?.avgLatency || (endTime - startTime);
+        const latencyEl = document.getElementById('average-latency');
+        if (latencyEl) latencyEl.textContent = `${latency} ms`;
+
+        // Atualizar Métricas (Total e por Serviço)
+        if (data.metrics) {
+            const totalEl = document.getElementById('total-requests');
+            if (totalEl) totalEl.textContent = (data.metrics.totalRequests || 0).toLocaleString();
+
+            // Mapeamento dinâmico baseado nos IDs do novo HTML
+            const serviceMapping = {
+                'cliente': 'cliente-requests',
+                'admin': 'admin-requests',
+                'motorista': 'appmotorista-requests' // Ajustado para o ID do HTML
+            };
+
+            for (const [key, id] of Object.entries(serviceMapping)) {
+                const el = document.getElementById(id);
+                const value = data.metrics.requestsByService?.[key];
+                if (el) el.textContent = (value || 0).toLocaleString();
+            }
+        }
+
+        // Atualizar Status dos Cards e Contagem de Nodes Ativos
+        if (data.services) {
+            let activeCount = 0;
+
+            const updateBadge = (selector, serviceData) => {
+                const card = document.querySelector(selector);
+                if (!card) return;
+                
+                const badge = card.querySelector('.status-badge');
+                const isUp = serviceData?.up ?? false;
+                
+                if (isUp) activeCount++;
+
+                if (badge) {
+                    badge.innerHTML = `<span class="status-dot ${isUp ? '' : 'bg-danger'}"></span> ${isUp ? 'Online' : 'Offline'}`;
+                    badge.style.color = isUp ? 'var(--accent-green)' : '#ff4d4d';
+                }
+            };
+
+            // Seletores baseados nas classes das APIs no novo HTML
+            updateBadge('.api-card.cliente', data.services.cliente);
+            updateBadge('.api-card.admin', data.services.admin);
+            updateBadge('.api-card.motorista', data.services.motorista);
+
+            const activeEl = document.getElementById('active-services');
+            if (activeEl) activeEl.textContent = activeCount;
+        }
+        
+    } catch (error) {
+        console.error('Erro ao verificar serviços:', error);
+        const activeEl = document.getElementById('active-services');
+        if (activeEl) activeEl.textContent = '0';
+    }
+}
+
+// --- 3. Inicialização e Hostname ---
 updateDateTime();
 setInterval(updateDateTime, 1000);
 
-// Verificar status dos serviços via API
-async function checkServices() {
-  try {
-      const response = await fetch('/health');
-      const data = await response.json();
-      
-      if(data.services){
-        const updateServiceBadge = (card, serviceData) => {
-          const badge = card.querySelector('.badge');
-          const span = badge.querySelector('.status-badge');
-          const isUp = serviceData?.up ?? false;
-          span.className = 'status-badge ' + (isUp ? 'status-online' : 'status-offline');
-          badge.innerHTML = span.outerHTML + ' ' + (isUp ? 'Online' : 'Offline');
-        };
-        updateServiceBadge(document.querySelector('.service-card-cliente'), data.services.cliente);
-        updateServiceBadge(document.querySelector('.service-card-admin'), data.services.admin);
-        updateServiceBadge(document.querySelector('.service-card-motorista'), data.services.motorista);
-      }
-      // Atualiza contador total
-      if (data.metrics) {
-          document.getElementById('total-requests').textContent = 
-              data.metrics.totalRequests.toLocaleString();
-          document.getElementById('cliente-requests').textContent = 
-              data.metrics.requestsByService.cliente.toLocaleString();
-          document.getElementById('admin-requests').textContent = 
-              data.metrics.requestsByService.admin.toLocaleString();
-             //console.log('Requisições Cliente:', data.metrics.requestsByService.cliente);
-            //console.log('Requisições Admin:', data.metrics.requestsByService.admin);
-      }
-
-      // Contar serviços ativos
-      let activeCount = 0;
-      if (data.services) {
-          for (const [service] of Object.entries(data.services)) {
-              if (service.up) {
-                  activeCount++;
-              }
-          }
-      }
-      
-      document.getElementById('active-services').textContent = activeCount || 0;
-      
-  } catch (error) {
-      console.error('Erro ao verificar serviços:', error);
-      document.getElementById('active-services').textContent = '0';
-  }
-}
-
-// Verificar serviços a cada 30 segundos
 checkServices();
-setInterval(checkServices, 30000);
+setInterval(checkServices, 30000); // Verifica a cada 30 segundos
 
-// Adicionar efeito de digitação no título
-const titles = [
-  'Gateway API JTI',
-  'Roteamento Inteligente',
-  'APIs Unificadas',
-  'Microsserviços'
-];
+// Preenche o Hostname na tabela técnica
+const gatewayEl = document.querySelector('.gateway');
+if (gatewayEl) gatewayEl.textContent = window.location.hostname;
 
+// Ciclo de títulos da aba
+const titles = ['Gateway API JTI', 'Roteamento Inteligente', 'APIs Unificadas'];
 let titleIndex = 0;
 setInterval(() => {
-  titleIndex = (titleIndex + 1) % titles.length;
-  document.title = titles[titleIndex] + ' | JTI';
+    titleIndex = (titleIndex + 1) % titles.length;
+    document.title = titles[titleIndex] + ' | JTI';
 }, 3000);
-document.querySelector('.gateway').textContent = window.location.hostname

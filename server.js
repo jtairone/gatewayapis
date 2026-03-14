@@ -46,7 +46,7 @@ const requestCounters = {
 };
 
 // Só conta requisições que passam pelos proxies das APIs
-const API_PATHS = ['/api/cliente', '/api/admin', '/api/appmotorista'];
+const API_PATHS = ['/api/cliente/', '/api/admin/', '/api/appmotorista/'];
 
 // Middleware para contar requisições (apenas rotas de proxy das APIs)
 app.use((req, res, next) => {
@@ -82,6 +82,7 @@ app.route('/')
       apiAdminUrl: API_ADMIN_URL,
       apiAppMotoristaUrl: API_MOTORISTA_URL,
       porta: '2096',
+      publichost: 'api.acopotiguar.com.br',
       contadores: requestCounters
 
     });
