@@ -20,12 +20,12 @@ if (!fs.existsSync(logsDir)) {
 }
 
 // Instalar dependências das APIs
-/* console.log('\n4️⃣ Instalando dependências das APIs...');
+console.log('\n4️⃣ Instalando dependências das APIs...');
 try {
   execSync('npm run install:all', { stdio: 'inherit', cwd: path.join(__dirname, '..') });
 } catch (error) {
   console.error('   ⚠️  Erro ao instalar dependências de algumas APIs');
-} */
+}
 
 console.log('\n✅ Setup concluído com sucesso!');
 console.log('\n📝 Comandos disponíveis:');
