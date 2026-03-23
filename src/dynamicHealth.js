@@ -131,7 +131,7 @@ const setupDynamicHealth = (app, requestCounters) => {
         nodeVersion: process.version,
         environment: process.env.NODE_ENV || 'development',
         port: process.env.GATEWAY_PORT || 2096,
-        host: process.env.PUBLIC_HOST || 'api.acopotiguar.com.br'
+        host: process.env.PUBLIC_HOST || 'api.dominioempresa.com.br'
       }
     });
   });
