@@ -1,28 +1,46 @@
 {
   "name": "gatewayapis",
   "version": "1.0.0",
-  "description": "Gateway para APIs AP",
+  "description": "Gateway para APIs AP - Configuração Dinâmica",
   "main": "server.js",
   "scripts": {
+    "setup": "node scripts/setup.js",
+    "generate": "node scripts/generate-package.js",
+    "generate:pm2": "node scripts/ecosystem-config.js",
+    "start:gateway": "node server.js",
+    "dev:gateway": "nodemon --ignore services/* server.js",
+    "start:all": "concurrently \"npm run start:gateway\" \"npm run start:appmotorista\" \"npm run start:portaladm\" \"npm run start:portalclienteap\" \"npm run start:_ap\"",
+    "dev:all": "concurrently \"nodemon --ignore services/* server.js\" \"npm run dev:appmotorista\" \"npm run dev:portaladm\" \"npm run dev:portalclienteap\" \"npm run dev:_ap\"",
+    "install:all": "npm install && cd services/apiappmotorista && npm install && cd services/apiportaladm && npm install && cd services/apiportalclienteap && npm install",
     "pm2:start": "pm2 start ecosystem.config.js",
     "pm2:stop": "pm2 stop ecosystem.config.js",
     "pm2:restart": "pm2 restart ecosystem.config.js",
     "pm2:delete": "pm2 delete ecosystem.config.js",
-    "start:gateway": "node server.js",
-    "start:cliente": "cd services/apiportalclienteap && nodemon --ignore api/swagger server.js api/database/dbapi.sqlite server.js",
-    "start:admin": "cd services/apiportaladm && nodemon --ignore api/swagger server.js",
-    "start:motorista": "cd services/apiappmotorista && nodemon --ignore api/swagger server.js server.js",
-    "start": "concurrently \"npm run start:gateway\" \"npm run start:cliente\" \"npm run start:admin\" \"npm run start:motorista\"",
-    "start:dev": "concurrently \"nodemon --ignore services/* server.js\" \"npm run start:cliente\" \"npm run start:admin\" \"npm run start:motorista\"",
-    "install:all": "npm install && cd services/api-cliente && npm install && cd ../api-admin && npm install && cd ../api-motorista && npm install"
+    "pm2:logs": "pm2 logs",
+    "pm2:status": "pm2 status",
+    "start:appmotorista": "cd services/apiappmotorista && node server.js",
+    "start:portaladm": "cd services/apiportaladm && node server.js",
+    "start:portalclienteap": "cd services/apiportalclienteap && node server.js",
+    "start:_ap": "cd services/api_ap && node server.js",
+    "dev:appmotorista": "cd services/apiappmotorista && nodemon --ignore api/swagger server.js",
+    "dev:portaladm": "cd services/apiportaladm && nodemon --ignore api/swagger server.js",
+    "dev:portalclienteap": "cd services/apiportalclienteap && nodemon --ignore api/swagger server.js",
+    "dev:_ap": "cd services/api_ap && nodemon --ignore api/swagger server.js",
+    "nodemon": "nodemon server.js",
+    "start": "concurrently \"npm run start:gateway\" \"npm run start:appmotorista\" \"npm run start:portaladm\" \"npm run start:portalclienteap\"",
+    "start:dev": "concurrently \"nodemon --ignore services/* server.js\" \"npm run dev:appmotorista\" \"npm run dev:portaladm\" \"npm run dev:portalclienteap\""
   },
   "author": "José Tairone Morais",
   "license": "ISC",
   "dependencies": {
-    "concurrently": "^7.6.0",
+    "cloudflare-ip": "^0.0.7",
+    "concurrently": "^9.2.1",
     "ejs": "^5.0.1",
     "express": "^5.2.1",
-    "express-rate-limit": "^7.5.1",
+    "express-rate-limit": "^8.3.1",
     "http-proxy-middleware": "^3.0.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
   }
 }

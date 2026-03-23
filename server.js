@@ -3,58 +3,68 @@ const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { createProxyMiddleware } = require('http-proxy-middleware');
 const rateLimit = require('express-rate-limit');
+const cloudflare = require('cloudflare-ip');
 
-// Rate limit no gateway: limite maior pois agrega tráfego das 3 APIs
-// Ajuste GATEWAY_RATE_LIMIT_MAX conforme a soma dos limites das suas APIs
+const { APIs } = require('./src/apis');
+const { setupDynamicProxies } = require('./src/dynamicProxy');
+const { setupDynamicHealth } = require('./src/dynamicHealth');
+
+// ========== CONFIGURAÇÕES INICIAIS ==========
+const app = express();
+
+// ========== RATE LIMIT ==========
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
-  max: parseInt(process.env.GATEWAY_RATE_LIMIT_MAX, 10) || 600, // 600 req/15min por IP (3 APIs × ~200)
+  max: parseInt(process.env.GATEWAY_RATE_LIMIT_MAX, 10) || 1000,
   message: { error: 'Muitas solicitações recebidas. Tente novamente mais tarde.' },
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => ['/health', '/metrics', '/favicon.ico'].some(p => req.path === p || req.path.startsWith(p))
+  skip: (req) => ['/health', '/metrics', '/favicon.ico', '/'].some(p => req.path === p || req.path.startsWith(p))
 });
 
-const app = express();
-
 app.use(limiter);
-// Usar variáveis de ambiente
-const API_CLIENTE_URL = process.env.API_CLIENTE_URL || 'http://localhost:3001';
-const API_ADMIN_URL = process.env.API_ADMIN_URL || 'http://localhost:3002';
-const API_MOTORISTA_URL = process.env.API_MOTORISTA_URL || 'http://localhost:3003';
 
-// ========== CONTADORES ==========
+// ========== TRUST PROXY (CLOUDFLARE) ==========
+app.set('trust proxy', cloudflare.express);
+
+// ========== VIEW ENGINE ==========
+app.set('view engine', 'ejs');
+app.set('views', './views');
+app.use(express.static('public'));
+
+// ========== CONTADORES DINÂMICOS ==========
 const requestCounters = {
   total: 0,
-  cliente: 0,
-  admin: 0,
-  motorista: 0,
-  byEndpoint: {}, // Para contar endpoints específicos
-  byMethod: {     // Contar por método HTTP
-    GET: 0,
-    POST: 0,
-    PUT: 0,
-    PATCH: 0,
-    OPTIONS: 0,
-    HEAD: 0,
-    DELETE: 0,
-    OTHER: 0
-  },
   startTime: new Date().toISOString(),
-  lastReset: new Date().toISOString()
+  lastReset: new Date().toISOString(),
+  byEndpoint: {},
+  byMethod: {
+    GET: 0, POST: 0, PUT: 0, PATCH: 0, OPTIONS: 0, HEAD: 0, DELETE: 0, OTHER: 0
+  }
 };
 
-// Só conta requisições que passam pelos proxies das APIs
-const API_PATHS = ['/api/cliente/', '/api/admin/', '/api/appmotorista/'];
+// Adicionar contadores para cada API dinamicamente
+Object.keys(APIs).forEach(apiKey => {
+  requestCounters[apiKey] = 0;
+});
 
-// Middleware para contar requisições (apenas rotas de proxy das APIs)
+console.log('\n📦 APIs carregadas dinamicamente:');
+Object.keys(APIs).forEach(apiKey => {
+  const api = APIs[apiKey];
+  console.log(`   ✅ ${apiKey}: ${api.route} -> ${api.url}`);
+});
+
+// ========== MIDDLEWARE DE CONTAGEM ==========
+const apiRoutes = Object.values(APIs).map(api => api.route);
+
 app.use((req, res, next) => {
-  const isApiRequest = API_PATHS.some(path => req.path === path || req.path.startsWith(path + '/'));
+  const isApiRequest = apiRoutes.some(route => req.path === route || req.path.startsWith(route + '/'));
   if (!isApiRequest) return next();
 
   requestCounters.total++;
+  
+  // Contar por método HTTP
   const method = req.method;
   const STANDARD_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'];
   if (STANDARD_METHODS.includes(method)) {
@@ -62,148 +72,147 @@ app.use((req, res, next) => {
   } else {
     requestCounters.byMethod['OTHER']++;
   }
-  const baseEndpoint = req.path.split('/')[2] || 'root'; // api/cliente -> cliente
+  
+  // Contar por endpoint (baseado na rota)
+  const baseEndpoint = req.path.split('/')[2] || 'root';
   if (!requestCounters.byEndpoint[baseEndpoint]) {
     requestCounters.byEndpoint[baseEndpoint] = 0;
   }
   requestCounters.byEndpoint[baseEndpoint]++;
+  
+  // Contar para API específica
+  const matchedRoute = apiRoutes.find(route => req.path === route || req.path.startsWith(route + '/'));
+  if (matchedRoute) {
+    const apiKey = Object.keys(APIs).find(key => APIs[key].route === matchedRoute);
+    if (apiKey && requestCounters[apiKey] !== undefined) {
+      requestCounters[apiKey]++;
+    }
+  }
+  
   next();
 });
 
-app.set('view engine', 'ejs')
-app.set('views', './views')
-app.use(express.static('public'))
-
-app.route('/')
-  .get((req, res) => {
+// ========== ROTA PRINCIPAL ==========
+app.route('/').get(async (req, res) => {
+  try {
+    // Buscar dados do health para a view
+    const protocol = req.protocol;
+    const host = req.get('host');
+    const healthUrl = `${protocol}://${host}/health`;
+    
+    const healthResponse = await fetch(healthUrl);
+    const healthData = await healthResponse.json();
+    
     res.render('home', { 
-      titulo: 'Página Inicial',
-      mensagem: 'Bem-vindo ao Gateway API',
-      apiClienteUrl: API_CLIENTE_URL,
-      apiAdminUrl: API_ADMIN_URL,
-      apiAppMotoristaUrl: API_MOTORISTA_URL,
-      porta: '2096',
-      publichost: 'api.acopotiguar.com.br',
-      contadores: requestCounters
-
+      titulo: 'Gateway API JTI',
+      mensagem: 'Hub de Microsserviços',
+      porta: process.env.GATEWAY_PORT || 2096,
+      publichost: process.env.PUBLIC_HOST || 'api.acopotiguar.com.br',
+      contadores: requestCounters,
+      apis: APIs,
+      health: healthData,
+      apiCount: Object.keys(APIs).length
     });
+  } catch (error) {
+    console.error('Erro ao buscar health data:', error.message);
+    res.render('home', { 
+      titulo: 'Gateway API JTI',
+      mensagem: 'Hub de Microsserviços',
+      porta: process.env.GATEWAY_PORT || 2096,
+      publichost: process.env.PUBLIC_HOST || 'api.acopotiguar.com.br',
+      contadores: requestCounters,
+      apis: APIs,
+      health: null,
+      apiCount: Object.keys(APIs).length
+    });
+  }
 });
 
-// Verifica se uma API está respondendo (tenta /health, fallback para /)
-function checkServiceHealth(url, timeoutMs = 3000) {
-  const tryUrl = (path) =>
-    new Promise((resolve) => {
-      const parsed = new URL(url);
-      const client = parsed.protocol === 'https:' ? https : http;
-      const targetUrl = `${url.replace(/\/$/, '')}${path}`;
-      const req = client.get(targetUrl, { timeout: timeoutMs }, (res) => {
-        res.resume(); // consome o body para liberar a conexão
-        resolve({ up: true, statusCode: res.statusCode });
-      });
-      req.on('error', (err) => resolve({ up: false, error: err.message }));
-      req.on('timeout', () => {
-        req.destroy();
-        resolve({ up: false, error: 'Timeout' });
-      });
-    });
+// ========== HEALTH CHECK DINÂMICO ==========
+setupDynamicHealth(app, requestCounters);
 
-  return tryUrl('/health').then((r) => (r.up ? r : tryUrl('/')));
-}
+// ========== CONFIGURAR PROXIES DINÂMICOS ==========
+const proxies = setupDynamicProxies(app, requestCounters);
 
-// Health check do gateway com verificação real das APIs
-app.get('/health', async (req, res) => {
-  const timeout = parseInt(process.env.HEALTH_CHECK_TIMEOUT_MS, 10) || 3000;
-  const [clienteStatus, adminStatus, motoristaStatus] = await Promise.all([
-    checkServiceHealth(API_CLIENTE_URL, timeout),
-    checkServiceHealth(API_ADMIN_URL, timeout),
-    checkServiceHealth(API_MOTORISTA_URL, timeout)
-  ]);
+console.log('\n🚀 Proxies configurados:');
+proxies.forEach(proxy => {
+  console.log(`   📡 ${proxy.name}: ${proxy.route} -> ${proxy.target}`);
+});
 
-  const allUp = clienteStatus.up && adminStatus.up && motoristaStatus.up;
-
-  res.status(allUp ? 200 : 503).json({
-    status: allUp ? 'OK' : 'DEGRADED',
-    timestamp: new Date().toISOString(),
-    services: {
-      cliente: { url: API_CLIENTE_URL, up: clienteStatus.up, ...clienteStatus },
-      admin: { url: API_ADMIN_URL, up: adminStatus.up, ...adminStatus },
-      motorista: { url: API_MOTORISTA_URL, up: motoristaStatus.up, ...motoristaStatus }
-    },
-    metrics: {
-      totalRequests: requestCounters.total,
-      requestsByService: {
-        cliente: requestCounters.cliente,
-        admin: requestCounters.admin,
-        motorista: requestCounters.motorista
-      },
-      requestsByMethod: requestCounters.byMethod,
+// ========== ROTA DE STATUS DAS APIS ==========
+app.get('/api/status', (req, res) => {
+  const status = {
+    gateway: {
       uptime: process.uptime(),
       startTime: requestCounters.startTime,
-      lastReset: requestCounters.lastReset
-    }
+      totalRequests: requestCounters.total,
+      nodeVersion: process.version,
+      environment: process.env.NODE_ENV || 'development'
+    },
+    apis: {}
+  };
+  
+  Object.keys(APIs).forEach(apiKey => {
+    status.apis[apiKey] = {
+      name: APIs[apiKey].name,
+      route: APIs[apiKey].route,
+      target: APIs[apiKey].url,
+      requests: requestCounters[apiKey] || 0
+    };
+  });
+  
+  res.json(status);
+});
+
+// ========== ROTA DE MÉTRICAS SIMPLES ==========
+app.get('/metrics', (req, res) => {
+  const metrics = {
+    timestamp: new Date().toISOString(),
+    total_requests: requestCounters.total,
+    requests_by_method: requestCounters.byMethod,
+    requests_by_endpoint: requestCounters.byEndpoint,
+    apis: {}
+  };
+  
+  Object.keys(APIs).forEach(apiKey => {
+    metrics.apis[apiKey] = {
+      requests: requestCounters[apiKey] || 0,
+      route: APIs[apiKey].route,
+      target: APIs[apiKey].url
+    };
+  });
+  
+  res.json(metrics);
+});
+
+// ========== ROTA DE RESET DE CONTADORES ==========
+app.post('/api/reset-counters', (req, res) => {
+  requestCounters.total = 0;
+  requestCounters.byMethod = {
+    GET: 0, POST: 0, PUT: 0, DELETE: 0, PATCH: 0, OPTIONS: 0, HEAD: 0, OTHER: 0
+  };
+  requestCounters.byEndpoint = {};
+  requestCounters.lastReset = new Date().toISOString();
+  
+  Object.keys(APIs).forEach(apiKey => {
+    requestCounters[apiKey] = 0;
+  });
+  
+  res.json({ 
+    message: 'Contadores resetados com sucesso',
+    resetTime: requestCounters.lastReset
   });
 });
 
-// Proxy para API Cliente
-app.use('/api/cliente', (req, res, next) => {
-  requestCounters.cliente++;
-  next();
-}, createProxyMiddleware({
-  target: API_CLIENTE_URL,
-  changeOrigin: true,
-  pathRewrite: { '^/api/cliente': '' },
-  proxyTimeout: 15000, // 15s
-  timeout: 15000,
-  onError: (err, req, res) => {
-    console.error('Erro no proxy cliente:', err);
-    res.status(503).json({ error: 'Serviço cliente indisponível' });
-  }
-}));
-
-// Proxy para API Admin
-app.use('/api/admin', (req, res, next) => {
-  requestCounters.admin++;
-  next();
-}, createProxyMiddleware({
-  target: API_ADMIN_URL,
-  changeOrigin: true,
-  pathRewrite: { '^/api/admin': '' },
-  proxyTimeout: 15000, // 15s
-  timeout: 15000,
-  onError: (err, req, res) => {
-    console.error('Erro no proxy admin:', err);
-    res.status(503).json({ error: 'Serviço admin indisponível' });
-  }
-}));
-
-// Proxy para API Motorista
-app.use('/api/appmotorista', (req, res, next) => {
-  requestCounters.motorista++;
-  next();
-}, createProxyMiddleware({
-  target: API_MOTORISTA_URL,
-  changeOrigin: true,
-  pathRewrite: { '^/api/appmotorista': '' },
-  proxyTimeout: 15000, // 15s
-  timeout: 15000,
-  onError: (err, req, res) => {
-    console.error('Erro no proxy motorista:', err);
-    res.status(503).json({ error: 'Serviço motorista indisponível' });
-  }
-}));
-
-// Certificados SSL
+// ========== CARREGAR CERTIFICADOS SSL ==========
 let credentials;
 try {
-
-   const certDir = path.join(__dirname, 'src/cert'); // Ajuste o caminho conforme necessário
+  const certDir = path.join(__dirname, 'src/cert');
   
-  // Verifica se a pasta existe
   if (!fs.existsSync(certDir)) {
     throw new Error(`Pasta de certificados não encontrada: ${certDir}`);
   }
   
-  // Lê todos os arquivos da pasta
   const files = fs.readdirSync(certDir);
   
   // Procura por arquivos de chave (.key)
@@ -236,22 +245,59 @@ try {
     cert: fs.readFileSync(certPath)
   };
 
-  console.log(`✅ Certificados SSL carregados com sucesso:`);
+  console.log(`\n✅ Certificados SSL carregados com sucesso:`);
   console.log(`   📁 Pasta: ${certDir}`);
   console.log(`   🔑 Chave: ${keyFile}`);
   console.log(`   📜 Certificado: ${certFile}`);
 
 } catch (error) {
-  console.error('Erro ao carregar certificados SSL:', error);
+  console.error('\n❌ Erro ao carregar certificados SSL:', error.message);
+  console.error('   Certifique-se de que os arquivos .key e .pem/.crt existem na pasta src/cert');
   process.exit(1);
 }
 
+// ========== INICIAR SERVIDOR ==========
 const PORT = process.env.GATEWAY_PORT || 2096;
 
 // Gateway HTTPS
 https.createServer(credentials, app).listen(PORT, () => {
-  console.log(`🚀 Gateway rodando em HTTPS na porta ${PORT}`);
-  console.log(`📡 API Cliente: ${API_CLIENTE_URL}`);
-  console.log(`📡 API Admin: ${API_ADMIN_URL}`);
-  console.log(`📡 API App Motorista: ${API_MOTORISTA_URL}`);
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`🚀 GATEWAY RODANDO EM HTTPS NA PORTA ${PORT}`);
+  console.log(`${'='.repeat(60)}`);
+  console.log(`📊 Total de APIs carregadas: ${Object.keys(APIs).length}`);
+  console.log(`\n📡 Endpoints disponíveis:`);
+  console.log(`   🏠 Home: https://localhost:${PORT}/`);
+  console.log(`   ❤️  Health: https://localhost:${PORT}/health`);
+  console.log(`   📈 Metrics: https://localhost:${PORT}/metrics`);
+  console.log(`   🔄 Status: https://localhost:${PORT}/api/status`);
+  
+  console.log(`\n🎯 Proxies configurados:`);
+  Object.keys(APIs).forEach(apiKey => {
+    const api = APIs[apiKey];
+    console.log(`   📍 ${api.route} → ${api.url}`);
+  });
+  
+  console.log(`\n✨ Gateway dinâmico pronto!`);
+  console.log(`📝 Adicione novas APIs na pasta ./services e reinicie o gateway`);
+  console.log(`${'='.repeat(60)}\n`);
 });
+
+// ========== TRATAMENTO DE ENCERRAMENTO GRACEFUL ==========
+/* process.on('SIGINT', () => {
+  console.log('\n\n🛑 Recebido sinal SIGINT. Encerrando gateway...');
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n\n🛑 Recebido sinal SIGTERM. Encerrando gateway...');
+  process.exit(0);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('\n❌ Erro não tratado:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('\n❌ Promise rejeitada não tratada:', reason);
+}); */
